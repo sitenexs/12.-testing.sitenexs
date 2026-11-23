@@ -552,7 +552,14 @@
         <!-- Inside-Phone Browser Frame 1 -->
         <div class="viewport-wrap">
           <div class="empty-state" id="empty1">Ketik domain website untuk memuat di layar HP 1.</div>
-          <iframe class="phone-frame" id="frame1" name="phone_frame_1" title="Layar HP 1"></iframe>
+          <iframe
+            class="phone-frame"
+            id="frame1"
+            name="dual_phone_slot_1"
+            sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+            allow="identity-credentials-get"
+            title="Layar HP 1"
+          ></iframe>
         </div>
 
         <div class="phone-nav-bar"><div class="home-indicator"></div></div>
@@ -599,7 +606,14 @@
         <!-- Inside-Phone Browser Frame 2 -->
         <div class="viewport-wrap">
           <div class="empty-state" id="empty2">Ketik domain website untuk memuat di layar HP 2.</div>
-          <iframe class="phone-frame" id="frame2" name="phone_frame_2" title="Layar HP 2"></iframe>
+          <iframe
+            class="phone-frame"
+            id="frame2"
+            name="dual_phone_slot_2"
+            sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+            allow="identity-credentials-get"
+            title="Layar HP 2"
+          ></iframe>
         </div>
 
         <div class="phone-nav-bar"><div class="home-indicator"></div></div>
@@ -610,6 +624,8 @@
   <script>
     const GOOGLE_CLIENT_KEY_PREFIX = 'dual_phone_google_client_id_v1_';
     const GOOGLE_PROFILE_KEY_PREFIX = 'dual_phone_google_profile_v1_';
+    const FRAME_URL_KEY_PREFIX = 'dual_phone_frame_url_v1_';
+    const PHONE_STORAGE_PREFIX = 'dual_phone_isolated_store_v1_';
 
     let focusState = 0; // 0 = 2 HP, 1 = HP 1 saja, 2 = HP 2 saja
     let isSideBySide = false;
@@ -623,6 +639,14 @@
       1: JSON.parse(localStorage.getItem(GOOGLE_PROFILE_KEY_PREFIX + '1') || 'null'),
       2: JSON.parse(localStorage.getItem(GOOGLE_PROFILE_KEY_PREFIX + '2') || 'null')
     };
+
+    function getPhoneIsolatedStore(phoneId) {
+      return JSON.parse(localStorage.getItem(PHONE_STORAGE_PREFIX + phoneId) || '{}');
+    }
+
+    function savePhoneIsolatedStore(phoneId, storeObj) {
+      localStorage.setItem(PHONE_STORAGE_PREFIX + phoneId, JSON.stringify(storeObj));
+    }
 
     function updatePhoneClocks() {
       const now = new Date();
@@ -754,12 +778,33 @@
       return val;
     }
 
-    function setFrameSrc(phoneId, targetUrl) {
+    function applyPhoneIsolationBridge(phoneId) {
+      const frame = document.getElementById(`frame${phoneId}`);
+      try {
+        const win = frame.contentWindow;
+        if (!win) return;
+        win.name = `dual_phone_device_${phoneId}`;
+        const store = getPhoneIsolatedStore(phoneId);
+        win.postMessage({
+          type: 'DUAL_PHONE_SESSION_INIT',
+          phoneId: phoneId,
+          googleAccount: googleProfiles[phoneId] || null,
+          isolatedData: store
+        }, '*');
+      } catch (_) {
+        // Cross-origin frame tidak bisa diakses langsung dari parent window
+      }
+    }
+
+    function setFrameSrc(phoneId, targetUrl, persist = true) {
       const frame = document.getElementById(`frame${phoneId}`);
       const empty = document.getElementById(`empty${phoneId}`);
       empty.classList.add('hidden');
       frame.classList.add('visible');
       frame.src = targetUrl;
+      if (persist) {
+        localStorage.setItem(FRAME_URL_KEY_PREFIX + phoneId, targetUrl);
+      }
     }
 
     function loadPhoneUrl(e, phoneId) {
@@ -768,7 +813,7 @@
       const normalized = normalizeDomainUrl(input.value);
       if (!normalized) return;
       input.value = normalized;
-      setFrameSrc(phoneId, normalized);
+      setFrameSrc(phoneId, normalized, true);
     }
 
     function loadBothPhones(e) {
@@ -781,8 +826,8 @@
       document.getElementById('url1').value = normalized;
       document.getElementById('url2').value = normalized;
 
-      setFrameSrc(1, normalized);
-      setFrameSrc(2, normalized);
+      setFrameSrc(1, normalized, true);
+      setFrameSrc(2, normalized, true);
     }
 
     function resetAllFrames() {
@@ -793,6 +838,7 @@
         frame.classList.remove('visible');
         empty.classList.remove('hidden');
         document.getElementById(`url${id}`).value = '';
+        localStorage.removeItem(FRAME_URL_KEY_PREFIX + id);
       });
       document.getElementById('sharedUrlInput').value = '';
     }
@@ -833,10 +879,36 @@
       }
     }
 
+    function restoreSavedFrames() {
+      ['1', '2'].forEach(id => {
+        const savedUrl = localStorage.getItem(FRAME_URL_KEY_PREFIX + id);
+        if (savedUrl) {
+          document.getElementById(`url${id}`).value = savedUrl;
+          setFrameSrc(id, savedUrl, false);
+        }
+      });
+    }
+
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'DUAL_PHONE_STORE_SET' && (data.phoneId === 1 || data.phoneId === 2)) {
+        const current = getPhoneIsolatedStore(data.phoneId);
+        if (data.key) {
+          current[data.key] = data.value;
+          savePhoneIsolatedStore(data.phoneId, current);
+        }
+      }
+    });
+
+    document.getElementById('frame1').addEventListener('load', () => applyPhoneIsolationBridge(1));
+    document.getElementById('frame2').addEventListener('load', () => applyPhoneIsolationBridge(2));
+
     updatePhoneClocks();
     setInterval(updatePhoneClocks, 15000);
     renderGoogleAccount(1);
     renderGoogleAccount(2);
+    restoreSavedFrames();
   </script>
 </body>
 </html>
